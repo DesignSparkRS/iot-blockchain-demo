@@ -1,0 +1,168 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+# Copyright (c) 2018 RS Components Ltd
+# SPDX-License-Identifier: Apache License 2.0
+
+import os
+import signal
+import yaml
+import time
+import zmq
+
+# Load configuration
+
+with open("/opt/iotbc/etc/config.yml", 'r') as ymlfile:
+    cfg = yaml.load(ymlfile)
+
+device = cfg['application']['role']
+
+blockchain_port = cfg['blockchain']['leds_port']
+buttons_port = cfg['buttons']['leds_port']
+application_port = cfg['application']['leds_port']
+
+# Define LED pin numbers and if running on a Pi also load the GPIO module
+
+if device == 'miner':
+    red = 504
+    green = 505
+else:
+    import RPi.GPIO as GPIO
+    if device == 'carcrash':
+        red = 26
+        green = 17
+    else:
+        red = 16
+        green = 14
+
+pins = [red, green]
+
+# Function to configure LED pins as outputs
+
+def confpins():
+    if device == 'miner':
+        with open('/sys/class/gpio/export', 'w') as f:
+            for pin in pins:
+                if os.path.isdir('/sys/class/gpio/gpio{0}'.format(pin)) is False:
+                    print('Exporting pin: {0}'.format(pin))
+                    f.write(str(pin))
+                    f.flush()
+
+        for pin in pins:
+            with open('/sys/class/gpio/gpio{0}/direction'.format(pin), 'w') as f:
+                f.write("out")
+                f.flush()
+
+    else:
+        GPIO.setmode(GPIO.BCM)
+        for pin in pins:
+            GPIO.setup(pin, GPIO.OUT)
+
+
+# Process incoming command
+
+def parsecmd(string):
+    if msg.count(',') == 1:
+        colour, state = msg.split(',')
+        led(eval(colour), state)
+
+    elif msg.count(',') == 2:
+        colour, period, times = msg.split(',')
+        flash(eval(colour), float(period), int(times))
+
+    else:
+        print('Malformed command')
+
+
+# Set LED state
+
+def led(colour, state):
+    if device == 'miner':
+        with open('/sys/class/gpio/gpio{0}/value'.format(str(colour)), 'w') as f:
+            f.write(str(state))
+            f.flush()
+    else:
+        GPIO.output(colour, state)
+
+
+# Flash LED
+
+def flash(colour, period, times):
+    for t in range(times):
+        led(colour, 1)
+        time.sleep(period)
+        led(colour, 0)
+        if (times - t) > 1: 
+            time.sleep(period)
+
+
+# GracefulKiller
+
+class GracefulKiller:
+    kill_now = False
+    def __init__(self):
+        signal.signal(signal.SIGINT, self.exit_gracefully)
+        signal.signal(signal.SIGTERM, self.exit_gracefully)
+
+    def exit_gracefully(self,signum, frame):
+        self.kill_now = True
+
+
+# Main
+
+if __name__ == '__main__':
+
+    print('Starting Ethereum LEDs')
+
+    killer = GracefulKiller()
+
+    confpins()
+
+    led(red, 0)
+    led(green, 0)
+
+    context = zmq.Context()
+
+    buttons = context.socket(zmq.PAIR)
+    buttons.setsockopt(zmq.CONFLATE, 1)
+    buttons.bind("tcp://127.0.0.1:{0}".format(buttons_port))
+
+    application = context.socket(zmq.PAIR)
+    application.setsockopt(zmq.CONFLATE, 1)
+    application.bind("tcp://127.0.0.1:{0}".format(application_port))
+
+    ethnode = context.socket(zmq.PAIR)
+    ethnode.setsockopt(zmq.CONFLATE, 1)
+    ethnode.bind("tcp://127.0.0.1:{0}".format(blockchain_port))
+
+    poller = zmq.Poller()
+    poller.register(buttons, zmq.POLLIN)
+    poller.register(application, zmq.POLLIN)
+    poller.register(ethnode, zmq.POLLIN)
+
+    while True:
+        socks = dict(poller.poll(1000))
+
+        if socks:
+            if socks.get(buttons) == zmq.POLLIN:
+                print('Message received from buttons')
+                msg = buttons.recv(zmq.NOBLOCK).decode('utf-8')
+
+            elif socks.get(application) == zmq.POLLIN:
+                print('Message received from application')
+                msg = application.recv(zmq.NOBLOCK).decode('utf-8')
+
+            elif socks.get(ethnode) == zmq.POLLIN:      
+                print('Message received from Ethereum node')
+                msg = ethnode.recv(zmq.NOBLOCK).decode('utf-8')
+
+            parsecmd(msg)
+
+        if killer.kill_now:
+            break
+
+    print('Cleaning up')
+
+    if device != 'miner':
+        GPIO.cleanup()
+
+    print('Ethereum LEDs stopped')

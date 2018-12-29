@@ -1,0 +1,143 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+# Copyright (c) 2018 RS Components Ltd
+# SPDX-License-Identifier: Apache License 2.0
+
+import os
+import yaml
+import sys
+import time
+import zmq
+import signal
+import subprocess
+
+# Load configuration file
+
+with open("/opt/iotbc/etc/config.yml", 'r') as ymlfile:
+    cfg = yaml.load(ymlfile)
+
+device = cfg['application']['role']
+
+if device == 'miner':
+    import json 
+    import paho.mqtt.publish as publish
+    broker = cfg['mqtt']['broker']
+    txs = '0'
+
+# Setup activity LEDs
+
+leds_port = cfg['blockchain']['leds_port']
+led_period = '0.1'
+
+# geth APIs to expose
+
+APIS = "admin,db,eth,debug,miner,net,shh,txpool,personal,web"
+
+# Build the geth command
+
+## Base parameters
+
+gethcmd = (['/usr/local/bin/geth',
+           '--datadir', '/data/bc',
+           '--networkid', str(cfg['blockchain']['network_id']),
+           '--bootnodes', cfg['blockchain']['boot_node'],
+           '--unlock', '0',
+           '--password', '/dev/null',
+           '--nat', 'none',
+           '--rpc',
+           '--rpccorsdomain', '"*"',
+           '--rpcapi', APIS])
+
+## Append params for miner and set text to identify new block
+
+if device == 'miner':
+    gethcmd.extend(('--gasprice', str(cfg['blockchain']['gasprice'])))
+    gethcmd.extend(('--targetgaslimit', str(cfg['blockchain']['targetgaslimit'])))
+    gethcmd.append('--mine')
+    newblock = 'Successfully sealed new block'
+
+else:
+    newblock = 'Imported new chain segment'
+
+# Command to tee the output from geth to a non-blocking FIFO
+
+teecmd = (['/usr/local/bin/ftee', '/tmp/geth.out'])
+
+# Functions
+
+## Create FIFO for terminal to read output from
+
+def createfifo():
+    if os.path.exists('/tmp/geth.out') is False:
+        subprocess.run(['/usr/bin/mkfifo', '/tmp/geth.out'])
+
+
+## Process Geth output
+
+def processgeth(line):
+    global txs
+
+    if device == 'miner' and 'txs=' in line:
+        txs = line.split('txs=')[1].split()[0]
+
+        if int(txs) > 0:
+            leds.send_string('red,{0},{1}'.format(led_period, txs))
+
+    elif newblock in line:
+        leds.send_string('green,{0},1'.format(led_period))
+
+        if device == 'miner':
+            block = line.split('number=')[1].split()[0]
+
+            try:
+                msg = json.dumps({"block": block, "txs": txs})
+                publish.single('iotbc/{0}'.format(device), msg,
+                               hostname=broker, client_id=device)
+
+            except:
+                print('Failed to publish to MQTT broker')
+
+
+## Gracefully exit
+
+class GracefulKiller:
+    kill_now = False
+    def __init__(self):
+        signal.signal(signal.SIGINT, self.exit_gracefully)
+        signal.signal(signal.SIGTERM, self.exit_gracefully)
+
+    def exit_gracefully(self,signum, frame):
+        self.kill_now = True
+
+# Main
+
+if __name__ == '__main__':
+    print('Starting Ethereum node with: {0}'.format(gethcmd))
+
+    context = zmq.Context()
+    leds = context.socket(zmq.PAIR)
+    leds.connect("tcp://localhost:%s" % leds_port)    
+
+    killer = GracefulKiller()
+
+    createfifo()
+
+    ethnode = subprocess.Popen(gethcmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    fifofeed = subprocess.Popen(teecmd, stdin=ethnode.stderr, stdout=subprocess.PIPE)
+
+    for line in fifofeed.stdout:
+        out = line.decode('utf-8')
+        processgeth(out)
+
+        if killer.kill_now:
+            break
+
+    print('Cleaning up')
+
+    if ethnode is not None:
+        ethnode.terminate() 
+
+    if fifofeed is not None:
+        fifofeed.terminate()
+
+    print('Ethereum Node stopped')

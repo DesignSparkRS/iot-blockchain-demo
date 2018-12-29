@@ -1,0 +1,11 @@
+[Unit]
+Description=Hardware buttons
+After=eth-leds.service
+
+[Service]
+ExecStart=/opt/iotbc/bin/buttons
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

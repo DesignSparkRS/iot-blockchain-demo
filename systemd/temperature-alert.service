@@ -1,0 +1,13 @@
+[Unit]
+Description=Temperature Alert Application
+After=eth-node.service
+
+[Service]
+ExecStart=/opt/iotbc/bin/temperature-alert
+Restart=always
+RestartSec=3
+User=demo
+Group=demo
+
+[Install]
+WantedBy=multi-user.target

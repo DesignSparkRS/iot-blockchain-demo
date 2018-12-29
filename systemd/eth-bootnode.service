@@ -1,0 +1,11 @@
+[Unit]
+Description=Ethereum Boot Node
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/bootnode -nodekey /opt/iotbc/etc/boot.key -verbosity 9 -addr 10.123.123.1:30310
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

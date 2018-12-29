@@ -1,0 +1,198 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+# Copyright (c) 2018 RS Components Ltd
+# SPDX-License-Identifier: Apache License 2.0
+
+import os
+import subprocess
+import signal
+import yaml
+import time
+import zmq
+
+# Load configuration
+
+with open("/opt/iotbc/etc/config.yml", 'r') as ymlfile:
+    cfg = yaml.load(ymlfile)
+
+device = cfg['application']['role']
+leds_port = cfg['buttons']['leds_port']
+
+dataparimg = '/opt/iotbc/var/datapar.img'
+
+
+# Set up conditional params for different device types
+
+if device == 'miner':
+    bcr = 489
+    datapar = '/dev/sda2'
+
+else:
+    import RPi.GPIO as GPIO
+
+    if device == 'carcrash':
+        bcr = 14
+        reboot = 15
+    else:
+        bcr = 15
+        reboot = 17
+
+    pins = [bcr, reboot]
+
+    datapar = '/dev/mmcblk0p3'
+
+
+# Text to display on the miner console TTY when BCR is triggered
+
+bcrtxt = ('\033[93m' + '\n'
+          '************************************************************************************' + '\n'
+          '****************************** ! BLOCKCHAIN  RESET ! *******************************' + '\n'
+          '************************************************************************************' + '\n'
+          '********** There will be a 3 minute delay before mining starts again.    ***********' + '\n'
+          '********** For a complete network reset press BCR on all demo units now! ***********' + '\n'
+          '************************************************************************************' + '\n'
+          '\033[0m' + '\n')
+
+
+# Configure pins as inputs
+
+def confpins():
+    if device == 'miner':
+        if os.path.isdir('/sys/class/gpio/gpio{0}'.format(str(bcr))) is False:
+            with open('/sys/class/gpio/export', 'w') as f:
+                f.write(str(bcr))
+                f.flush()
+
+        with open('/sys/class/gpio/gpio{0}/direction'.format(str(bcr)), 'w') as f:
+                f.write("in")
+                f.flush()
+
+    else:
+        GPIO.setmode(GPIO.BCM)
+        for pin in pins:
+            GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+
+# Get pin state
+
+def getpin(pin):
+    if device == 'miner':
+        with open('/sys/class/gpio/gpio{0}/value'.format(str(pin)), 'r') as f:
+            state = int(f.read().rstrip())
+    else:
+        state = GPIO.input(pin)
+    return state
+
+
+# Decorator to ensure a function can only be triggered again after s seconds
+# 
+# Taken from:
+# https://gist.github.com/walkermatt/2871026#gistcomment-2280711
+
+def holdoff(s):
+    def decorate(f):
+        t = None
+
+        def wrapped(*args, **kwargs):
+            nonlocal t
+            t_ = time.time()
+            if t is None or t_ - t >= s:
+                result = f(*args, **kwargs)
+                t = time.time()
+                return result
+        return wrapped
+    return decorate
+
+
+## Blockchain reset (limit to running at most every 10 mins)
+
+@holdoff(600)
+def blockchainreset():
+    print('BCR!')
+
+    leds.send_string('red,0.1,20')
+
+    print('Stop Ethereum node')
+    subprocess.run(['/bin/systemctl', 'stop', 'eth-node'],
+                   stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL)
+
+    if device == 'miner':
+        with open('/tmp/geth.out', 'w') as f:
+            f.write(bcrtxt)
+            f.flush
+
+    print('Unmount /data')
+    subprocess.run(['/bin/umount', '/data'],
+                   stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL)
+
+    print('Restore /data from partition image')
+    subprocess.run(['/sbin/e2image', '-ar', dataparimg, datapar],
+                   stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL)
+
+    print('Mount /data')
+    subprocess.run(['/bin/mount', '/data'],
+                   stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL)
+
+    print('Pause for 3 minutes to allow a complete network reset if required')
+    time.sleep(180)
+
+    print('Start Ethereum node')
+    subprocess.run(['/bin/systemctl', 'start', 'eth-node'],
+                   stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL)
+
+    leds.send_string('green,0.1,20')
+
+
+# Reboot
+
+def sysrestart():
+    cmd = ['/sbin/shutdown', '-r', 'now']
+    restarter = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+    out = restarter.communicate()[0]
+    print(out)
+
+
+# Gracefully exit
+
+class GracefulKiller:
+    kill_now = False
+    def __init__(self):
+        signal.signal(signal.SIGINT, self.exit_gracefully)
+        signal.signal(signal.SIGTERM, self.exit_gracefully)
+
+    def exit_gracefully(self,signum, frame):
+        self.kill_now = True
+
+
+# Main
+
+if __name__ == '__main__':
+    print('Starting buttons')
+
+    context = zmq.Context()
+    leds = context.socket(zmq.PAIR)
+    leds.connect("tcp://localhost:%s" % leds_port)
+
+    killer = GracefulKiller()
+
+    confpins()
+
+    while True:
+        if getpin(bcr) == 0:
+            blockchainreset()
+
+        if device != 'miner':
+           if getpin(reboot) == 0:
+               sysrestart()
+
+        time.sleep(1) 
+
+        if killer.kill_now:
+            break
+
+    print('Buttons stopped')

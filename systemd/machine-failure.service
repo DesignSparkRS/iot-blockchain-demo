@@ -1,0 +1,13 @@
+[Unit]
+Description=Machine Failure Application
+After=eth-node.service
+
+[Service]
+ExecStart=/opt/iotbc/bin/machine-failure
+Restart=always
+RestartSec=3
+User=demo
+Group=demo
+
+[Install]
+WantedBy=multi-user.target

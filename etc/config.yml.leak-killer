@@ -1,0 +1,18 @@
+application:
+    role: leakkiller
+    leds_port: 5558
+
+buttons:
+    leds_port: 5557
+
+mqtt:
+    broker: miner
+
+blockchain:
+    boot_node: "enode://3d8007b5099e2ee9ae384aac17ff508d6827a1aec956131344df\
+                6eded933656bac0a9f51768fce908580b7b293ff0d6737633e794bc7f29a\
+                8683371709f98ec5@10.123.123.1:30310"
+    network_id: 555
+    account: "0x478f2c61e4eB1c09596a7af138b94AE598dE32c0"
+    contract: "0x69BFAdF73B41D5Fad552D83613Fd994fb1435b60"
+    leds_port: 5556

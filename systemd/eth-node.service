@@ -1,0 +1,14 @@
+[Unit]
+Description=Ethereum Node
+Requires=eth-bootnode.service
+After=eth-bootnode.service eth-leds.service mqtt-broker.service
+
+[Service]
+ExecStart=/opt/iotbc/bin/eth-node
+Restart=always
+RestartSec=3
+User=demo
+Group=demo
+
+[Install]
+WantedBy=multi-user.target

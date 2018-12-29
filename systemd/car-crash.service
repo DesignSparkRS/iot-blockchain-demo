@@ -1,0 +1,13 @@
+[Unit]
+Description=Car Crash Application
+After=eth-node.service
+
+[Service]
+ExecStart=/opt/iotbc/bin/car-crash
+Restart=always
+RestartSec=3
+User=pi
+Group=pi
+
+[Install]
+WantedBy=multi-user.target
