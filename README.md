@@ -4,7 +4,7 @@
 
 The code in this repository is from a set of IoT Blockchain demonstrators constructed for [Electronica](https://electronica.de) 2018, built upon the Raspberry Pi platform and which integrate sensors and outputs, a private Ethereum network with supporting smart contracts, plus MQTT for real-time data.
 
-For further details, see [RS IoT Blockchain Demonstrators Part 1: Introduction](https://www.rs-online.com/designspark/rs-iot-blockchain-demonstrators-part-1-introduction).
+For a more detailed introduction, see [RS IoT Blockchain Demonstrators Part 1: Introduction](https://www.rs-online.com/designspark/rs-iot-blockchain-demonstrators-part-1-introduction).
 
 ## Purpose
 
@@ -38,6 +38,7 @@ For further details, see [RS IoT Blockchain Demonstrators Part 4: Blockchain Net
 Dependencies vary depending upon the script and include:
 
 * DesignSpark.Pmod
+* luma.led_matrix
 * paho-mqtt
 * PyYAML
 * pyzmq
@@ -56,7 +57,7 @@ Each demonstrator only requires two files: the corresponding ABI file and _confi
 
 #### ABI
 
-Should a smart contracted be updated such that its ABI changes, the JSON that is generated following _truffle compile_ will need to be used to update the corresponding ABI file, e.g. _CarCrashABI.json_.
+Should a smart contract be updated such that its ABI changes, the JSON that is generated following _truffle compile_ will need to be used to update the corresponding ABI file, e.g. _CarCrashABI.json_.
 
 #### config.yml
 
