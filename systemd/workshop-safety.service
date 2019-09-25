@@ -1,0 +1,13 @@
+[Unit]
+Description=Workshop Safety Application
+After=eth-node.service
+
+[Service]
+ExecStart=/opt/iotbc/bin/workshop-safety
+Restart=always
+RestartSec=3
+User=pi
+Group=pi
+
+[Install]
+WantedBy=multi-user.target

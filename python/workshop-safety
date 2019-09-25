@@ -1,0 +1,123 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+# Copyright (c) 2018, 2019 RS Components Ltd
+# SPDX-License-Identifier: MIT License
+
+import sys
+import time
+import json
+import yaml
+import zmq
+import signal
+
+from datetime import datetime
+
+import paho.mqtt.publish as publish
+
+from web3 import Web3, HTTPProvider
+from web3.contract import ConciseContract
+from web3.middleware import geth_poa_middleware
+
+from DesignSpark.Pmod.HAT import createPmod
+from luma.core.render import canvas
+from luma.oled.device import ssd1331
+from PIL import ImageFont
+
+import RPi.GPIO as GPIO
+
+with open("/opt/iotbc/etc/config.yml", 'r') as ymlfile:
+    cfg = yaml.load(ymlfile)
+
+with open("/opt/iotbc/etc/WorkshopSafetyABI.json", 'r') as f:
+    abi = json.load(f)
+
+device = cfg['application']['role']
+leds_port = cfg['application']['leds_port']
+broker = cfg['mqtt']['broker']
+account = cfg['blockchain']['account']
+contract = cfg['blockchain']['contract']
+
+# Ethereum
+
+w3 = Web3(HTTPProvider('http://127.0.0.1:8545'))
+w3.middleware_stack.inject(geth_poa_middleware, layer=0)
+
+WorkshopSafety = w3.eth.contract(
+    contract, abi=abi, ContractFactoryClass=ConciseContract)
+
+def IoTBCwrite(data):
+    WorkshopSafety.setLastIncident(int(data), transact={'from': account})
+
+## Gracefully exit
+
+class GracefulKiller:
+    kill_now = False
+    def __init__(self):
+        signal.signal(signal.SIGINT, self.exit_gracefully)
+        signal.signal(signal.SIGTERM, self.exit_gracefully)
+
+    def exit_gracefully(self,signum, frame):
+        self.kill_now = True
+
+# Main
+
+if __name__ == '__main__':
+
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(4, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    GPIO.setup(12, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+    context = zmq.Context()
+    leds = context.socket(zmq.PAIR)
+    leds.connect("tcp://localhost:%s" % leds_port)
+
+    oled = createPmod('OLEDrgb','JA')
+    display = oled.getDevice()
+    font = ImageFont.truetype("FreeMonoBold.ttf", 26, encoding="unic")
+
+    killer = GracefulKiller()
+
+    while True:
+        runsw = GPIO.input(4)
+        enable = GPIO.input(12)
+
+        if runsw == 0:
+
+            if enable == 0:
+                incidenttime = int(datetime.today().timestamp())
+
+                print('Workshop incident at {0}!'.format(incidenttime))
+
+                with canvas(display) as draw:
+                    draw.rectangle(display.bounding_box, outline="red", fill="black")
+                    draw.text((16,20), '!!!', fill="red", font=font) 
+
+                try:
+                    publish.single('iotbc/{0}'.format(device), incidenttime, hostname=broker, client_id=device)
+                except:
+                    print('Failed to publish to MQTT broker')
+
+                try:
+                    IoTBCwrite(incidenttime)
+                    leds.send_string('red,0.05,20')
+                except:
+                    print('Failed to write to blockchain')
+
+                time.sleep(5)
+
+            else:
+                with canvas(display) as draw:
+                    draw.rectangle(display.bounding_box, outline="green", fill="black")
+                    draw.text((16,20), 'RUN', fill="green", font=font)
+
+                time.sleep(0.2)
+
+        else:
+            with canvas(display) as draw:
+                draw.rectangle(display.bounding_box, outline="white", fill="black")
+                draw.text((16,20), 'STOP', fill="white", font=font)
+
+        if killer.kill_now:
+            break
+
+        time.sleep(1)
